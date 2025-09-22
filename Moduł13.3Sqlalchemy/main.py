@@ -1,94 +1,103 @@
-import os
-import csv
-from sqlalchemy import create_engine, MetaData, Table, Column, String, Float
 
 
-if os.path.exists("stations.db"):
-    os.remove("stations.db")
+from sqlalchemy import create_engine, Column, Integer, String, Float, and_
+from sqlalchemy.orm import declarative_base  
+from sqlalchemy.orm import sessionmaker
 
 
-engine = create_engine("sqlite:///stations.db", echo=True)
-metadata = MetaData()
+Base = declarative_base()
+engine = create_engine('sqlite:///weather.db', echo=False)  
+Session = sessionmaker(bind=engine)
 
 
-stations_table = Table(
-    "stations", metadata,
-    Column("station", String, primary_key=True),
-    Column("latitude", Float),
-    Column("longitude", Float),
-    Column("elevation", Float),
-    Column("name", String),
-    Column("country", String),
-    Column("state", String)
-)
+class Station(Base):
+    __tablename__ = 'stations'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    station = Column(String)
+    name = Column(String)
+    latitude = Column(Float)
+    longitude = Column(Float)
+    elevation = Column(Float)
+    state = Column(String)
+    country = Column(String)
+    timezone = Column(String, nullable=True)
+
+class Measure(Base):
+    __tablename__ = 'measure'
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    station = Column(String)
+    date = Column(String)
+    prcp = Column(Float, nullable=True)
+    tobs = Column(Float, nullable=True)
 
 
-measurements_table = Table(
-    "measurements", metadata,
-    Column("station", String),
-    Column("date", String),
-    Column("precip", Float),
-    Column("tobs", Float)
-)
+Base.metadata.create_all(engine)
 
 
-metadata.create_all(engine)
+def insert_csv(cls, csv_file):
+    session = Session()
+    if session.query(cls).first() is None:
+        with open(csv_file, newline='', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                for key in row:
+                    try:
+                        row[key] = float(row[key])
+                    except (ValueError, TypeError):
+                        pass
+                obj = cls(**row)
+                session.add(obj)
+        session.commit()
+    session.close()
 
-def load_csv_to_table(csv_file, table, engine):
-    rows = []
-    with open(csv_file, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            row_data = {}
-            for k, v in row.items():
-                # Zamiana na float jeśli możliwe
-                try:
-                    row_data[k] = float(v)
-                except ValueError:
-                    row_data[k] = v
-            rows.append(row_data)
-    with engine.begin() as conn:
-        conn.execute(table.delete())  
-        conn.execute(table.insert(), rows)  
+
+insert_csv(Station, "clean_stations.csv")
+insert_csv(Measure, "clean_measure.csv")
+
+
+def select_all(cls, limit=None):
+    session = Session()
+    q = session.query(cls)
+    if limit:
+        q = q.limit(limit)
+    result = q.all()
+    session.close()
+    return result
+
+def select_where(cls, **kwargs):
+    session = Session()
+    conds = [getattr(cls, k) == v for k, v in kwargs.items()]
+    result = session.query(cls).filter(and_(*conds)).all()
+    session.close()
+    return result
+
+def update(cls, row_id, **kwargs):
+    session = Session()
+    obj = session.query(cls).get(row_id)
+    if obj:
+        for k, v in kwargs.items():
+            setattr(obj, k, v)
+        session.commit()
+    session.close()
+
+def delete(cls, row_id):
+    session = Session()
+    obj = session.query(cls).get(row_id)
+    if obj:
+        session.delete(obj)
+        session.commit()
+    session.close()
+
 
 if __name__ == "__main__":
-    load_csv_to_table("clean_stations.csv", stations_table, engine)
-    load_csv_to_table("clean_measure.csv", measurements_table, engine)
+    print("=== Pierwsze 5 stacji (ORM) ===")
+    for s in select_all(Station, limit=5):
+        print(s.__dict__)
 
-    with engine.connect() as conn:
-        print("Pierwsze 5 rekordów z tabeli stations:")
-        result = conn.execute("SELECT * FROM stations LIMIT 5").fetchall()
-        for row in result:
-            print(row)
+    print("\n=== Pierwsze 5 pomiarów (ORM) ===")
+    for m in select_all(Measure, limit=5):
+        print(m.__dict__)
 
-        print("\nPierwsze 5 rekordów z tabeli measurements:")
-        result = conn.execute("SELECT * FROM measurements LIMIT 5").fetchall()
-        for row in result:
-            print(row)
-
-        
-        print("\nStacje w Polsce:")
-        result = conn.execute("SELECT * FROM stations WHERE country='PL'").fetchall()
-        for row in result:
-            print(row)
-
-        
-        conn.execute(
-            "UPDATE stations SET elevation=200.0 WHERE station=(SELECT station FROM stations LIMIT 1)"
-        )
-        updated_row = conn.execute(
-            "SELECT * FROM stations WHERE station=(SELECT station FROM stations LIMIT 1)"
-        ).fetchone()
-        print("\nPo aktualizacji pierwszej stacji:")
-        print(updated_row)
-
-        
-        second_station = conn.execute(
-            "SELECT station FROM stations LIMIT 1 OFFSET 1"
-        ).fetchone()[0]
-        conn.execute(f"DELETE FROM stations WHERE station='{second_station}'")
-        deleted_row = conn.execute(
-            f"SELECT * FROM stations WHERE station='{second_station}'"
-        ).fetchone()
-        print(f"\nPo usunięciu stacji {second_station}:")
-        print(deleted_row)
+    print("\n=== Filtrowanie stacji w stanie 'HI' (ORM) ===")
+    for s in select_where(Station, state='HI')[:5]:
+        print(s.__dict__)
