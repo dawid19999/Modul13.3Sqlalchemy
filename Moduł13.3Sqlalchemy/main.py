@@ -125,3 +125,4 @@ if __name__ == "__main__":
         rows = conn.execute(text("SELECT * FROM measure LIMIT 5")).fetchall()
         for row in rows:
             print(row)
+
