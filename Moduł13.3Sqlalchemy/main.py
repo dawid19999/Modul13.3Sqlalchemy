@@ -1,128 +1,87 @@
 
-
 import csv
-from sqlalchemy import create_engine, Column, Integer, String, Float, and_, text
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy import create_engine
 
 
-Base = declarative_base()
-engine = create_engine("sqlite:///weather.db", echo=False, future=True)
-Session = sessionmaker(bind=engine, future=True)
+engine = create_engine("sqlite:///database.db", echo=True)
+conn = engine.connect()
 
 
+conn.execute("DROP TABLE IF EXISTS stations")
+conn.execute("DROP TABLE IF EXISTS measurements")
 
-class Station(Base):
-    __tablename__ = "stations"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    station = Column(String)
-    name = Column(String)
-    latitude = Column(Float)
-    longitude = Column(Float)
-    elevation = Column(Float)
-    state = Column(String)
-    country = Column(String)
-    timezone = Column(String, nullable=True)
+conn.execute("""
+CREATE TABLE stations (
+    station TEXT,
+    latitude REAL,
+    longitude REAL,
+    elevation REAL,
+    name TEXT,
+    country TEXT,
+    state TEXT
+)
+""")
 
-
-class Measure(Base):
-    __tablename__ = "measure"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    station = Column(String)
-    date = Column(String)
-    prcp = Column(Float, nullable=True)
-    tobs = Column(Float, nullable=True)
-
-
-
-Base.metadata.create_all(engine)
+conn.execute("""
+CREATE TABLE measurements (
+    station TEXT,
+    date TEXT,
+    precip REAL,
+    tobs REAL
+)
+""")
 
 
+with open("clean_stations.csv", newline="", encoding="utf-8") as f:
+    reader = csv.reader(f)
+    next(reader) 
+    conn.execute(
+        "INSERT INTO stations (station, latitude, longitude, elevation, name, country, state) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        list(reader)
+    )
 
-def insert_csv(cls, csv_file):
-    """Ładowanie danych z pliku CSV do tabeli."""
-    session = Session()
-    if session.query(cls).first() is None:  
-        with open(csv_file, newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                for key in row:
-                    try:
-                        row[key] = float(row[key])
-                    except (ValueError, TypeError):
-                        pass
-                obj = cls(**row)
-                session.add(obj)
-        session.commit()
-    session.close()
-
-
-def select_all(cls, limit=None):
-    """Zwraca wszystkie rekordy lub limit."""
-    session = Session()
-    q = session.query(cls)
-    if limit:
-        q = q.limit(limit)
-    result = q.all()
-    session.close()
-    return result
+with open("clean_measure.csv", newline="", encoding="utf-8") as f:
+    reader = csv.reader(f)
+    next(reader)
+    conn.execute(
+        "INSERT INTO measurements (station, date, precip, tobs) "
+        "VALUES (?, ?, ?, ?)",
+        list(reader)
+    )
 
 
-def select_where(cls, **kwargs):
-    """Zwraca rekordy spełniające warunek."""
-    session = Session()
-    conds = [getattr(cls, k) == v for k, v in kwargs.items()]
-    result = session.query(cls).filter(and_(*conds)).all()
-    session.close()
-    return result
+print("\nPierwsze 5 rekordów z tabeli stations:")
+rows = conn.execute("SELECT * FROM stations LIMIT 5").fetchall()
+for row in rows:
+    print(row)
+
+print("\nStacje z USA:")
+rows = conn.execute("SELECT * FROM stations WHERE country = 'US' LIMIT 5").fetchall()
+for row in rows:
+    print(row)
+
+print("\nPomiary gdzie opady > 1.0:")
+rows = conn.execute("SELECT * FROM measurements WHERE precip > 1.0 LIMIT 5").fetchall()
+for row in rows:
+    print(row)
 
 
-def update(cls, row_id, **kwargs):
-    """Aktualizuje rekord po ID."""
-    session = Session()
-    obj = session.get(cls, row_id) 
-    if obj:
-        for k, v in kwargs.items():
-            setattr(obj, k, v)
-        session.commit()
-    session.close()
+print("\nAktualizacja nazwy stacji USC00519397...")
+conn.execute("UPDATE stations SET name = 'TEST STATION' WHERE station = 'USC00519397'")
+
+rows = conn.execute("SELECT * FROM stations WHERE station = 'USC00519397'").fetchall()
+print(rows)
 
 
-def delete(cls, row_id):
-    """Usuwa rekord po ID."""
-    session = Session()
-    obj = session.get(cls, row_id)  
-    if obj:
-        session.delete(obj)
-        session.commit()
-    session.close()
+print("\nUsuwam stację USC00513117...")
+conn.execute("DELETE FROM stations WHERE station = 'USC00513117'")
+
+rows = conn.execute("SELECT * FROM stations WHERE station = 'USC00513117'").fetchall()
+print(rows)  
 
 
+print("\nTabele w bazie danych:")
+print(engine.table_names())
 
-if __name__ == "__main__":
-    insert_csv(Station, "clean_stations.csv")
-    insert_csv(Measure, "clean_measure.csv")
-
-    print("=== Pierwsze 5 stacji (ORM) ===")
-    for s in select_all(Station, limit=5):
-        print(s.__dict__)
-
-    print("\n=== Pierwsze 5 pomiarów (ORM) ===")
-    for m in select_all(Measure, limit=5):
-        print(m.__dict__)
-
-    print("\n=== Filtrowanie stacji w stanie 'HI' (ORM) ===")
-    for s in select_where(Station, state="HI")[:5]:
-        print(s.__dict__)
-
-    
-    with engine.connect() as conn:
-        print("\n=== Pierwsze 5 stacji (RAW SQL) ===")
-        rows = conn.execute(text("SELECT * FROM stations LIMIT 5")).fetchall()
-        for row in rows:
-            print(row)
-
-        print("\n=== Pierwsze 5 pomiarów (RAW SQL) ===")
-        rows = conn.execute(text("SELECT * FROM measure LIMIT 5")).fetchall()
-        for row in rows:
-            print(row)
-
+conn.close()
